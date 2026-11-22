@@ -58,6 +58,10 @@ def promote_wait(body: PromoteIn, authorization: AuthHeader = None):
         if not wrow:
             raise HTTPException(404, "候补不存在")
         slot = conn.execute("SELECT * FROM slots WHERE id=?", (wrow["slot_id"],)).fetchone()
+        if not slot:
+            raise HTTPException(404, "档期不存在")
+        if not int(slot["generation"] or 0):
+            raise HTTPException(409, "档期缺代，禁止晋升占位：挂不上代")
         lock_key = f"slot:{slot['code']}"
         require_lock(conn, lock_key, user)
         try:

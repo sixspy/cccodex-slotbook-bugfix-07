@@ -19,6 +19,17 @@ class SlotIn(BaseModel):
     start_at: str
     end_at: str
     capacity: int = Field(ge=1, le=500)
+    # 建档初代卡：只接受甲路径（同事务落 generation=1）。
+    # 显式传 generation/mode 属偏离卡口径，拒写并记偏。
+    generation: int | None = None
+    mode: str | None = None
+
+
+def reject_deviation(conn, user: str, code: str, detail: dict) -> None:
+    """偏离建档初代卡：记偏后拒写，记偏须独立落盘。"""
+    write_audit(conn, user, "deviation_reject", code, {"card": "建档初代卡", **detail})
+    conn.commit()
+    raise HTTPException(409, "偏离建档初代卡：拒写并记偏")
 
 
 class CloseIn(BaseModel):
@@ -51,6 +62,14 @@ def create_slot(body: SlotIn, authorization: AuthHeader = None):
     with connect() as conn:
         require_lock(conn, f"slot:{body.code}", user)
         try:
+            # 建档初代卡：只走甲路径；显式指定影子/非一初代属偏离，拒写并记偏。
+            if body.generation not in (None, 1) or body.mode:
+                reject_deviation(
+                    conn,
+                    user,
+                    body.code,
+                    {"generation": body.generation, "mode": body.mode},
+                )
             exists = conn.execute(
                 "SELECT id FROM slots WHERE code=?", (body.code,)
             ).fetchone()
@@ -58,18 +77,35 @@ def create_slot(body: SlotIn, authorization: AuthHeader = None):
                 raise HTTPException(409, "档期编码已存在")
             if body.end_at <= body.start_at:
                 raise HTTPException(400, "结束时间必须晚于开始")
-            # BUGFIX-07 埋雷：建档不初始化代数
+            # 甲路径：容量与初代在同一条档期行同事务落下（generation=1）
             conn.execute(
                 """INSERT INTO slots(code,title,start_at,end_at,capacity,booked,status,generation)
-                   VALUES (?,?,?,?,?,0,'开放',0)""",
+                   VALUES (?,?,?,?,?,0,'开放',1)""",
                 (body.code, body.title, body.start_at, body.end_at, body.capacity),
             )
-            write_audit(conn, user, "slot_create", body.code, {**body.model_dump(), "bug": "no_gen"})
+            write_audit(
+                conn,
+                user,
+                "slot_create",
+                body.code,
+                {
+                    **body.model_dump(exclude={"generation", "mode"}),
+                    "generation": 1,
+                    "path": "甲",
+                },
+            )
             conn.commit()
+        except HTTPException:
+            # 失败则档期行与代数同滚，库里零增
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             release(conn, f"slot:{body.code}", user)
             conn.commit()
-    return {"ok": True, "code": body.code}
+    return {"ok": True, "code": body.code, "generation": 1}
 
 
 @router.post("/api/slots/close")

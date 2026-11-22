@@ -27,7 +27,27 @@ createApp({
     const contention = ref([]);
     const dash = ref({});
     const holdForm = ref({ slot_code: "S-AM-01", party_key: "P-NEW", seats: 1 });
+    const slotForm = ref({ code: "", title: "", start_at: "", end_at: "", capacity: 1 });
     const confirmId = ref(1);
+
+    function genOf(row) {
+      return Number((row && row.generation) || 0);
+    }
+
+    function auditGen(a) {
+      try {
+        const p = JSON.parse(a.payload || "{}");
+        return Number((a.action === "slot_create" ? p.generation : p.gen) || 0);
+      } catch { return 0; }
+    }
+
+    function auditGenState(a) {
+      const g = auditGen(a);
+      if (g) return g;
+      if (a.action === "deviation_reject") return "记偏";
+      if (a.action === "slot_create") return "缺代";
+      return "—";
+    }
 
     function logout() {
       token.value = "";
@@ -70,6 +90,10 @@ createApp({
       try { actionErr.value = ""; await api.post("/api/holds", holdForm.value); await refresh(); }
       catch (e) { actionErr.value = e.message; }
     }
+    async function doCreateSlot() {
+      try { actionErr.value = ""; await api.post("/api/slots", slotForm.value); await refresh(); }
+      catch (e) { actionErr.value = e.message; }
+    }
     async function doConfirm() {
       try { actionErr.value = ""; await api.post("/api/bookings/confirm", { hold_id: confirmId.value }); await refresh(); }
       catch (e) { actionErr.value = e.message; }
@@ -84,7 +108,8 @@ createApp({
     return {
       token, user, username, password, err, actionErr, tab, nav,
       slots, holds, waitlist, bookings, recon, audits, contention, dash,
-      holdForm, confirmId, login, logout, refresh, doHold, doConfirm, promoteWait,
+      holdForm, slotForm, confirmId, genOf, auditGen, auditGenState, login, logout, refresh,
+      doCreateSlot, doHold, doConfirm, promoteWait,
     };
   },
   template: `

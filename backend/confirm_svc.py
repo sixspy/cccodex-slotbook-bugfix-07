@@ -38,6 +38,8 @@ def confirm_hold(body: ConfirmIn, authorization: AuthHeader = None):
         slot = conn.execute("SELECT * FROM slots WHERE id=?", (hold["slot_id"],)).fetchone()
         if not slot:
             raise HTTPException(404, "档期不存在")
+        if not int(slot["generation"] or 0):
+            raise HTTPException(409, "档期缺代，禁止确认：快照挂不上代")
         lock_key = f"slot:{slot['code']}"
         require_lock(conn, lock_key, user)
         try:
@@ -63,8 +65,7 @@ def confirm_hold(body: ConfirmIn, authorization: AuthHeader = None):
                     hold["id"],
                     hold["party_key"],
                     hold["seats"],
-                    # BUGFIX-07 埋雷：代数 0 仍写入快照，挂不上代
-                    slot["generation"] or 0,
+                    int(slot["generation"]),
                     "已确认",
                     now,
                 ),
@@ -81,10 +82,14 @@ def confirm_hold(body: ConfirmIn, authorization: AuthHeader = None):
                 user,
                 "booking_confirm",
                 hold["party_key"],
-                {"booking_id": cur.lastrowid, "gen": slot["generation"]},
+                {"booking_id": cur.lastrowid, "gen": int(slot["generation"])},
             )
             conn.commit()
-            return {"ok": True, "booking_id": cur.lastrowid, "snapshot_gen": slot["generation"]}
+            return {
+                "ok": True,
+                "booking_id": cur.lastrowid,
+                "snapshot_gen": int(slot["generation"]),
+            }
         finally:
             release(conn, lock_key, user)
             conn.commit()

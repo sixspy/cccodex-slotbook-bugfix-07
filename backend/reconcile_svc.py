@@ -21,13 +21,15 @@ def reconcile_all(authorization: AuthHeader = None):
                    WHERE slot_id=? AND status='已确认'""",
                 (s["id"],),
             ).fetchone()["s"]
-            ok = int(booked_sum) == int(s["booked"])
+            gen = int(s["generation"] or 0)
+            ok = int(booked_sum) == int(s["booked"]) and gen >= 1
             items.append(
                 {
                     "slot_code": s["code"],
                     "slot_booked": s["booked"],
                     "booking_seats": booked_sum,
-                    "generation": s["generation"],
+                    "generation": gen,
+                    "gen_ok": gen >= 1,
                     "ok": ok,
                     "status": s["status"],
                 }
@@ -51,11 +53,13 @@ def reconcile_one(code: str, authorization: AuthHeader = None):
             "SELECT COUNT(*) c FROM holds WHERE slot_id=? AND status='占位中'",
             (s["id"],),
         ).fetchone()["c"]
+        gen = int(s["generation"] or 0)
         return {
             "slot_code": code,
             "slot_booked": s["booked"],
             "booking_seats": booked_sum,
             "open_holds": holds,
-            "ok": int(booked_sum) == int(s["booked"]),
-            "generation": s["generation"],
+            "ok": int(booked_sum) == int(s["booked"]) and gen >= 1,
+            "generation": gen,
+            "gen_ok": gen >= 1,
         }

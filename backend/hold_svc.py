@@ -24,7 +24,7 @@ def list_holds(authorization: AuthHeader = None):
     require_user(authorization)
     with connect() as conn:
         rows = conn.execute(
-            """SELECT h.*, s.code AS slot_code FROM holds h
+            """SELECT h.*, s.code AS slot_code, s.generation AS generation FROM holds h
                JOIN slots s ON s.id=h.slot_id ORDER BY h.id DESC LIMIT 200"""
         ).fetchall()
         return {"items": [dict(r) for r in rows]}
@@ -42,6 +42,8 @@ def create_hold(body: HoldIn, authorization: AuthHeader = None):
             ).fetchone()
             if not slot:
                 raise HTTPException(404, "档期不存在")
+            if not int(slot["generation"] or 0):
+                raise HTTPException(409, "档期缺代，禁止占位：请重建档期落初代")
             if slot["status"] != "开放":
                 raise HTTPException(409, "档期未开放，禁止占位")
             remain = int(slot["capacity"]) - int(slot["booked"])
@@ -66,7 +68,7 @@ def create_hold(body: HoldIn, authorization: AuthHeader = None):
                     {"slot": body.slot_code, "free": free, "want": body.seats},
                 )
                 conn.commit()
-                return {"disposition": "候补", "free": free}
+                return {"disposition": "候补", "free": free, "generation": int(slot["generation"])}
             cur = conn.execute(
                 """INSERT INTO holds(slot_id,party_key,seats,status,expire_at,created_at)
                    VALUES (?,?,?,?,?,?)""",
@@ -77,10 +79,20 @@ def create_hold(body: HoldIn, authorization: AuthHeader = None):
                 user,
                 "hold_create",
                 body.party_key,
-                {"slot": body.slot_code, "seats": body.seats, "hold_id": cur.lastrowid},
+                {
+                    "slot": body.slot_code,
+                    "seats": body.seats,
+                    "hold_id": cur.lastrowid,
+                    "gen": int(slot["generation"]),
+                },
             )
             conn.commit()
-            return {"disposition": "占位", "hold_id": cur.lastrowid, "expire_at": expire}
+            return {
+                "disposition": "占位",
+                "hold_id": cur.lastrowid,
+                "expire_at": expire,
+                "generation": int(slot["generation"]),
+            }
         finally:
             release(conn, lock_key, user)
             conn.commit()
